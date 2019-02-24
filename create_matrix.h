@@ -19,5 +19,7 @@ void PrintMatrix(int n, double *a, double *x, int max_out, int taskid, int numta
 int InputMatrix(int n, double *A, FILE *fin, int taskid, int numtasks);
 double SolutionError(int n, double* a, double* x);
 int multi(int n, double* a, double* x, int my_rank, double *residual, int total_threads, double tmp);
+void Transpose(int n, double* a, double* x, int taskid, int numtasks);
+double Residual(int n, double* a, double* b, int taskid, int numtasks);
 
 #endif /* __CREATE_MATRIX_H_INCLUDED__ */

@@ -1,6 +1,6 @@
 NAME	= 	MPI
 
-DEBUG	= 	-O3
+DEBUG	= 	#-O3
 CC		= 	mpicxx
 LD 		=	mpicxx
 CFLAGS	=	-c -Wall -Werror -Wshadow -pedantic-errors \

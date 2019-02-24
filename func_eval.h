@@ -5,6 +5,6 @@
 #include <stdlib.h>
 #include <math.h>
 
-void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid, int numtasks);
+int InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid, int numtasks);
 
 #endif /* __FUNC_EVAL_H_INCLUDED__ */

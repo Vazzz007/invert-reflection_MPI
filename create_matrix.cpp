@@ -24,16 +24,6 @@ static double gilb_f(int i, int j){
     return 1.0 / (i + j + 1.0);
 }
 
-static double up_tr(int i, int j){
-    if (i == j){
-	return (double)1;
-    }
-    if (i < j){
-	return (double)-1;
-    }
-    return (double)0;
-}
-
 static double uniform(int i, int j, int n){
     return (double)(n - max(i, j));
 }
@@ -50,18 +40,14 @@ int create_matrix(double *A, int n, char *formula, int taskid, int numtasks){
         for (i = 0; i < rows; ++i)
             for (j = 0; j < n; ++j)
                 A[i * n + j] = sym_f(taskid + numtasks * i, j);
-    } else if (strcmp(formula, "symnul") == 0){
+    } else if (strcmp(formula, "smn") == 0){
         for (i = 0; i < rows; ++i)
             for (j = 0; j < n; ++j)
                 A[i * n + j] = symnul_f(taskid + numtasks * i, j);
-    } else if (strcmp(formula, "gilb") == 0){
+    } else if (strcmp(formula, "glb") == 0){
         for (i = 0; i < rows; ++i)
             for (j = 0; j < n; ++j)
                 A[i * n + j] = gilb_f(taskid + numtasks * i, j);
-    } else if (strcmp(formula, "1") == 0){
-        for (i = 0; i < rows; ++i)
-            for (j = 0; j < n; ++j)
-                A[i * n + j] = up_tr(taskid + numtasks * i, j);
     } else if (strcmp(formula, "9") == 0){
         for (i = 0; i < rows; ++i)
             for (j = 0; j < n; ++j)
@@ -164,49 +150,121 @@ int InputMatrix(int n, double *A, FILE *fin, int taskid, int numtasks){
     return 0;
 }
 
-double SolutionError(int n, double* a, double* x){
-    int i;
-    int j;
-    int k;
+double Residual(int n, double* a, double* b, int taskid, int numtasks)
+{   
+    int rows;
     double tmp;
-    double rezult;
 
-    rezult = 0.0;
-    for (i = 0; i < n; ++i){
-        for (j = 0; j < n; ++j){
-            tmp = 0.0;
-            for (k = 0; k < n; ++k)
-                tmp += a[i * n + k] * x[k * n + j];
+    if (taskid + 1 > n%numtasks) rows = n/numtasks;
+    else rows = n/numtasks + 1;
 
-            if (i == j)
-                tmp -= 1.0;
+    double res = 0.0;
 
-            rezult += tmp * tmp;
-        }
-    }
+    for (int i = 0; i < rows; ++i){
+        for (int j = 0; j < rows; ++j){
 
-    return sqrt(rezult);
-}
-
-int multi(int n, double* a, double* x, int my_rank, double *residual, int total_threads, double tmp)
-{
-    //*residual = 0.0;
-
-    for (int i = my_rank * n / total_threads; i < (my_rank + 1) * n / total_threads; ++i){
-        for (int j = 0; j < n; ++j){
             tmp = 0.0;
             for (int k = 0; k < n; ++k)
-                tmp += a[i * n + k] * x[k * n + j];
-
-            if (i == j)
-                tmp -= 1.0;
-
-            *residual += tmp * tmp;
-
+                tmp += a[i * n + k] * b[j * n + k];
+            //printf("tmp = %f\n", tmp);
+            res += tmp * tmp;
+            //printf("taskid = %d, i = %d\n", taskid, i);
         }
     //printf("\nmy_rank = %d, i = %d, residual = %10.3e\n", my_rank, i, *residual);
     }
-    *residual = sqrt(*residual);
+    //printf("res = %f\n", res);
     
-    return 0;
+    return res;
+}
+
+void Transpose(int n, double* a, double* x, int taskid, int numtasks){
+    int i, j, rows, sum = 0;
+    double *aux = NULL;
+    if (taskid == 0) aux = (double *)malloc(n*n*sizeof(double));
+    MPI_Status status;
+    
+    for (i = 0; i < n; i++)
+    {
+        
+        if (taskid == 0)
+        {
+            
+            if (taskid == i%numtasks)
+            {
+                for (j = 0; j < n; j++)
+                    aux[i*n + j] = a[i/numtasks * n + j];
+            }
+            else
+            {
+                MPI_Recv(x, n, MPI_DOUBLE, i%numtasks, 0, MPI_COMM_WORLD, &status);
+                for (j = 0; j < n; j++){
+
+                    aux[i*n + j] = x[j];
+                    //printf(" %10.3e \n", aux[i*n + j]);
+                }
+            }
+        }
+        else if (taskid == i%numtasks)
+        {
+            for (j = 0; j < n; j++){
+                //printf(" %10.3e \n", a[i/numtasks * n + j]);
+                x[j] = a[i/numtasks * n + j];
+            }
+            MPI_Send(x, n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+        }
+
+        //printf("\ntaskid = %d, i = %d\n", taskid, i);
+    }
+    /*if(taskid == 0){
+        for (i = 0; i < n; ++i){
+            printf("| ");
+            for (j = 0; j < n; ++j)
+                printf("%10.3e ", aux[i * n + j]);
+            printf("|\n");
+        }
+    }*/
+
+
+    if (taskid + 1 > n%numtasks) rows = n/numtasks;
+    else rows = n/numtasks + 1;
+    if (taskid == 0){
+        //printf("\ntaskid = %d\n", taskid);
+        if (taskid + 1 > n%numtasks) rows = n/numtasks;
+        else rows = n/numtasks + 1;
+
+        for (i = 0; i < n; ++i)
+            for (j = 0; j < rows; ++j)
+                a[j * n + i] = aux[i*n + (j * numtasks + taskid)];
+        //printf("\ntaskid = %d, rows = %d\n", taskid, rows);
+        sum += rows;
+        if (numtasks == 1) return;
+        for (int k = 1; k < numtasks; ++k){
+            if (k + 1 > n%numtasks) rows = n/numtasks;
+            else rows = n/numtasks + 1;
+
+
+            //printf("\ntaskid %d waiting for sending %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
+            for (int s = 0; s < rows; ++s){
+                for(i = 0; i < n; ++i){
+                    x[i] = aux[i*n + (s * numtasks + k)];
+                }
+                MPI_Send(x, n, MPI_DOUBLE, k, 0, MPI_COMM_WORLD); // to WORKERS
+            }
+            
+            //printf("\ntaskid %d sent %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
+            sum += rows;
+        }
+    } else {
+        
+        if (taskid + 1 > n%numtasks) rows = n/numtasks;
+        else rows = n/numtasks + 1;
+        //printf("\ntaskid %d waiting to recieve %d elements from taskid 0", taskid, rows*n);
+        for (int s = 0; s < rows; ++s){
+            MPI_Recv(&a[s*n], n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &status); // from MASTER
+        }
+        //printf("\ntaskid %d recieved %d elements from taskid 0", taskid, rows*n);
+    }
+    //printf("\ntaskid = %d\n", taskid);
+    MPI_Barrier(MPI_COMM_WORLD);
+    free(aux);
 }
