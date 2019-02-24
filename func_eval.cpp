@@ -1,250 +1,166 @@
-#include <stdlib.h>
 #include <math.h>
-#include <stdio.h>
-#include "mpi.h"
+#include <mpi.h>
 
 #include "func_eval.h"
 
-#define MASTER 0               /* taskid of first task */
-#define FROM_MASTER 1          /* setting a message type */
-#define FROM_WORKER 2          /* setting a message type */
-
-int InvMatrix(int n, double *a, double *x, int total_threads, int *result, int v)
+void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid, int numtasks)
 {
-// ________Declaration and initialization of mpi parameters_____________
+  int i, j, k;
+  int rows;
+  int first;
+  double tmp;
+  double q1, q2;
+  double inv_norma;
 
-int	numtasks,              /* number of tasks in partition */
-	taskid,                /* a task identifier */
-	numworkers,            /* number of worker tasks */
-	source,                /* task id of message source */
-	dest,                  /* task id of message destination */
-	mtype,                 /* message type */
-	rows,                  /* rows of matrix A sent to each worker */
-	averow, extra, offset, /* used to determine rows sent to each worker */
-	i, j, k, rc;           /* misc */
-	first_row;
-	last_row;
+  if (taskid + 1 > n%numtasks) rows = n/numtasks;
+  else rows = n/numtasks + 1;
 
-double tmp1, tmp2;
+  for (i = 0; i < rows; i++)
+    for (j = 0; j < n; j++)
+      b[i * n + j] = (taskid + i * numtasks == j);
 
-MPI_Status status;
-
-int argc = 1;
-char argv[1][9] = {
-	{'-', 'n', ' ', total_threads}
-}
-
-MPI_Init(&argc,&argv);
-MPI_Comm_rank(MPI_COMM_WORLD,&taskid);
-MPI_Comm_size(MPI_COMM_WORLD,&numtasks);
-if (numtasks < 2 ) {
-	printf("Need at least two MPI tasks. Quitting...\n");
-	MPI_Abort(MPI_COMM_WORLD, rc);
-	exit(1);
-	}
-numworkers = numtasks-1;
-
-// ________________End_______________________________
-
-
-/**************************** master task open ************************************/
-
-if (taskid == MASTER)
-   {
-      printf("mpi_invertion has started with %d tasks.\n",numtasks);
-
-      /* Measure start time */
-      double start = MPI_Wtime();
-
-      for (i = 0; i < n; i++)
-			for (j = 0; j < n; j++)
-				x[i * n + j] = (double)(i == j);
-
-      /* Send matrix data to the worker tasks */
-      averow = NRA/numworkers;
-      extra = NRA%numworkers;
-      offset = 0;
-      mtype = FROM_MASTER;
-      for (dest=1; dest<=numworkers; dest++)
+  for (i = 0; i < n; i++)
+  {
+    if (taskid == i%numtasks)
+    {
+      if (i == n - 1)
       {
-         rows = (dest <= extra) ? averow+1 : averow;   	
-         if (v == 1)
-         	printf("Sending %d rows to task %d offset=%d\n",rows,dest,offset);
-         MPI_Send(&offset, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
-         MPI_Send(&rows, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
-         MPI_Send(&a[offset][0], rows*n, MPI_DOUBLE, dest, mtype,
-                   MPI_COMM_WORLD);
-         MPI_Send(&b, n*n, MPI_DOUBLE, dest, mtype, MPI_COMM_WORLD);
-         offset = offset + rows;
+        tmp = 1.0/a[i/numtasks * n + i];
+        a[i/numtasks * n + i] = 1.0;
+        for (j = 0; j < n; j++)
+          b[i/numtasks * n + j] *= tmp;
+        continue;
       }
 
-      /* Receive results from worker tasks */
-      mtype = FROM_WORKER;
-      for (i=1; i<=numworkers; i++)
+      for (q1 = 0.0, j = i/numtasks + 1; j < rows; j++)
+        q1 += a[j * n + i] * a[j * n + i];
+
+      MPI_Reduce(&q1, &q2, 1, MPI_DOUBLE, MPI_SUM, i%numtasks, MPI_COMM_WORLD);
+
+      tmp = sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
+      a[i/numtasks * n + i] -= tmp;
+      inv_norma = 1.0/sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
+      MPI_Bcast(&inv_norma, 1, MPI_DOUBLE, i%numtasks, MPI_COMM_WORLD);
+
+      for (j = i/numtasks; j < rows; j++)
+        a[j * n + i] *= inv_norma;
+
+      for (k = i + 1; k < n; k++)
       {
-         source = i;
-         MPI_Recv(&offset, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
-         MPI_Recv(&rows, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
-         MPI_Recv(&c[offset][0], rows*n, MPI_DOUBLE, source, mtype, 
-                  MPI_COMM_WORLD, &status);
-         // printf("Received results from task %d\n",source);
+        for (q1 = 0.0, j = i/numtasks; j < rows; j++)
+          q1 += a[j * n + i] * a[j * n + k];
+        x1[k] = q1;
       }
 
-      /* Print results */
-      /*
-      printf("******************************************************\n");
-      printf("Result Matrix:\n");
-      for (i=0; i<NRA; i++)
+      MPI_Allreduce(x1, x2, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+      for (k = i + 1; k < n; k++)
       {
-         printf("\n"); 
-         for (j=0; j<n; j++) 
-            printf("%6.2f   ", c[i][j]);
+        x2[k] *= 2.0;
+        for (j = i/numtasks; j < rows; j++)
+          a[j * n + k] -= x2[k] * a[j * n + i];
       }
-      printf("\n******************************************************\n");
-      */
 
-      /* Measure finish time */
-      double finish = MPI_Wtime();
-      printf("Done in %f seconds.\n", finish - start);
-   }
+      for (k = 0; k < n; k++)
+      {
+        for (q1 = 0.0, j = i/numtasks; j < rows; j++)
+          q1 += a[j * n + i] * b[j * n + k];
+        x1[k] = q1;
+      }
 
-/**************************** worker task ************************************/
-if (taskid > MASTER)
-   {
-      mtype = FROM_MASTER;
-      MPI_Recv(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
-      MPI_Recv(&rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
-      MPI_Recv(&a, rows*NCA, MPI_DOUBLE, MASTER, mtype, MPI_COMM_WORLD, &status);
-      MPI_Recv(&b, NCA*NCB, MPI_DOUBLE, MASTER, mtype, MPI_COMM_WORLD, &status);
+      MPI_Allreduce(x1, x2, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-      for (k=0; k<NCB; k++)
-         for (i=0; i<rows; i++)
-         {
-            c[i][k] = 0.0;
-            for (j=0; j<NCA; j++)
-               c[i][k] = c[i][k] + a[i][j] * b[j][k];
-         }
-      mtype = FROM_WORKER;
-      MPI_Send(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
-      MPI_Send(&rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
-      MPI_Send(&c, rows*NCB, MPI_DOUBLE, MASTER, mtype, MPI_COMM_WORLD);
-   }
+      for (k = 0; k < n; k++)
+      {
+        x2[k] *= 2.0;
+        for (j = i/numtasks; j < rows; j++)
+          b[j * n + k] -= x2[k] * a[j * n + i];
+      }
 
+      a[i/numtasks * n + i] = tmp;
+      for (j = i/numtasks + 1; j < rows; j++)
+        a[j * n + i] = 0.0;
 
-
-	for (i = 0; i < n-1; i++){
-
-        if (v == 1)
-            printf("\nmy_rank = %d , i = %d \n", taskid, i);
-        //Нужно научиться передавать данные в другой thread
-        synchronize(total_threads);
-		tmp1 = 0.0;
-		for (j = i + 1; j < n; j++)
-			tmp1 += a[j * n + i] * a[j * n + i];
-
-		tmp2 = sqrt(tmp1 + a[i * n + i] * a[i * n + i]);
-            
-            
-        if (tmp2 < 1e-100){
-            *result = -1;
-            //printf ("status in func = %d", *status);
-            pthread_exit(NULL);
-            return -1;
-        }
-        synchronize(total_threads);
-        if (taskid == 1){
-			a[i * n + i] -= tmp2;
-        }
-        synchronize(total_threads);
-        tmp1 = sqrt(tmp1 + a[i * n + i] * a[i * n + i]);
-
-        synchronize(total_threads);
-        if (v == 1)
-            printf("\nmy_rank = %d , tmp1 = %f \n", my_rank, tmp1);
-
-        if (tmp1 < 1e-100){
-            if (taskid == 1)
-                a[i * n + i] += tmp2;
-            //Здесь нужно передать индекс i другим процессам
-            printf("Change index");
-            continue;
-        }
-
-        synchronize(total_threads);
-
-        tmp1 = 1.0/tmp1;
-        if (my_rank == 0){
-            
-            for (j = i; j < n; j++)
-                a[j * n + i] *= tmp1;
-            
-        }
-        
-
-		synchronize(total_threads);
-
-		first_row = (n - i - 1) * my_rank;
-		first_row = first_row/total_threads + i + 1;
-		last_row = (n - i - 1) * (my_rank + 1);
-		last_row = last_row/total_threads + i + 1;
-
-		for (k = first_row; k < last_row; k++)
-		{
-			tmp1 = 0.0;
-			for (j = i; j < n; j++)
-				tmp1 += a[j * n + i] * a[j * n + k];
-
-			tmp1 *= 2.0;
-			for (j = i; j < n; j++)
-				a[j * n + k] -= tmp1 * a[j * n + i];
-		}
-		synchronize(total_threads);
-
-		first_row = n * my_rank;
-		first_row = first_row/total_threads;
-		last_row = n * (my_rank + 1);
-		last_row = last_row/total_threads;
-
-		for (k = first_row; k < last_row; k++)
-		{
-			tmp1 = 0.0;
-			for (j = i; j < n; j++)
-				tmp1 += a[j * n + i] * x[j * n + k];
-
-			tmp1 *= 2.0;
-			for (j = i; j < n; j++)
-				x[j * n + k] -= tmp1 * a[j * n + i];
-
-		}
-		synchronize(total_threads);
-
-		if (my_rank == 0)
-			a[i * n + i] = tmp2;
-
-	}
-    synchronize(total_threads);
-
-	first_row = n * my_rank;
-	first_row = first_row/total_threads;
-	last_row = n * (my_rank + 1);
-	last_row = last_row/total_threads;
-    if (v == 1)
-        printf("\nmy_rank = %d , Go to gauss\n", my_rank);
-
-	for (k = first_row; k < last_row; k++){
-		for (i = n - 1; i >= 0; i--)
-		{
-			tmp1 = x[i * n + k];
-			for (j = i + 1; j < n; j++)
-				tmp1 -= a[i * n + j] * x[j * n + k];
-			x[i * n + k] = tmp1/a[i * n + i];
-		}
-        if (v == 1)
-            printf("\nmy_rank = %d , k = %d \n", my_rank, k);
+      tmp = 1.0/a[i/numtasks * n + i];
+      for (j = i; j < n; j++)
+        a[i/numtasks * n + j] *= tmp;
+      for (j = 0; j < n; j++)
+        b[i/numtasks * n + j] *= tmp;
     }
+    else
+    {
+      if (i == n - 1) continue;
 
-    if (v == 1)
-        printf("\nmy_rank = %d , Work done!\n", my_rank);
-	return 0;
-	MPI_Finalize();
+      if (taskid > i%numtasks) first = i/numtasks;
+      else first = i/numtasks + 1;
+
+      for (q1 = 0.0, j = first; j < rows; j++)
+        q1 += a[j * n + i] * a[j * n + i];
+
+      MPI_Reduce(&q1, &q2, 1, MPI_DOUBLE, MPI_SUM, i%numtasks, MPI_COMM_WORLD);
+
+      MPI_Bcast(&inv_norma, 1, MPI_DOUBLE, i%numtasks, MPI_COMM_WORLD);
+
+      for (j = first; j < rows; j++)
+        a[j * n + i] *= inv_norma;
+
+      for (k = i + 1; k < n; k++)
+      {
+        for (q1 = 0.0, j = first; j < rows; j++)
+          q1 += a[j * n + i] * a[j * n + k];
+        x1[k] = q1;
+      }
+
+      MPI_Allreduce(x1, x2, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+      for (k = i + 1; k < n; k++)
+      {
+        x2[k] *= 2.0;
+        for (j = first; j < rows; j++)
+          a[j * n + k] -= x2[k] * a[j * n + i];
+      }
+
+      for (k = 0; k < n; k++)
+      {
+        for (q1 = 0.0, j = first; j < rows; j++)
+          q1 += a[j * n + i] * b[j * n + k];
+        x1[k] = q1;
+      }
+
+      MPI_Allreduce(x1, x2, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+      for (k = 0; k < n; k++)
+      {
+        x2[k] *= 2.0;
+        for (j = first; j < rows; j++)
+          b[j * n + k] -= x2[k] * a[j * n + i];
+      }
+
+      for (j = first; j < rows; j++)
+        a[j * n + i] = 0.0;
+    }
+  }
+
+  for (i = n - 1; i >= 1; i--)
+  {
+    if (taskid == i%numtasks)
+    {
+      MPI_Bcast(b + i/numtasks * n, n, MPI_DOUBLE, i%numtasks, MPI_COMM_WORLD);
+      for (j = i/numtasks - 1; j >= 0 ; j--)
+        for (k = 0; k < n; k++)
+          b[j * n + k] -= b[i/numtasks * n + k] * a[j * n + i];
+    }
+    else
+    {
+      MPI_Bcast(x1, n, MPI_DOUBLE, i%numtasks, MPI_COMM_WORLD);
+
+      if (taskid < i%numtasks) first = i/numtasks;
+      else if (i/numtasks - 1 >= 0) first = i/numtasks - 1;
+      else continue;
+
+      for (j = first; j >= 0; j--)
+        for (k = 0; k < n; k++)
+          b[j * n + k] -= x1[k] * a[j * n + i];
+    }
+  }
 }

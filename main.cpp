@@ -1,3 +1,4 @@
+#include <mpi.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -7,14 +8,13 @@
 #include <errno.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
 #include "args.h"
 #include "create_matrix.h"
 #include "func_eval.h"
 
 #define EPS 1e-16
 
-/* factorial supports the following command-line arguments:
+/* invert-reflection supports the following command-line arguments:
  * 
  * -i input_file_name.txt - name of the input file (default = NULL)
  * -n number - number of elements (default = 0)
@@ -37,188 +37,218 @@ struct timespec diff(struct timespec start, struct timespec end)
     return temp;
 }
 
-typedef struct
-{
-    int n;
-    double *A;
-    double *X;
-    int my_rank;
-    double residual;
-    int total_threads;
-    double tmp;
-} ARGS_mul;
-
-typedef struct
-{
-    int n;
-    double *A;
-    double *X;
-    int my_rank;
-    int total_threads;
-    int status;
-    int v;
-} ARGS;
-
 struct timespec time_thread_inv, time_thread_resid;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void *Multiplication(void *p_arg);
-
-void *Multiplication(void *p_arg)
-{
-    ARGS_mul *arg = (ARGS_mul*)p_arg;
-    struct timespec time_thread_start, time_thread_end;
-    
-    if( clock_gettime( CLOCK_THREAD_CPUTIME_ID, &time_thread_start) == -1 ) {
-        perror( "clock gettime" );
-        exit( EXIT_FAILURE );
-    }
-
-    multi(arg->n, arg->A, arg->X, arg->my_rank, &arg->residual, arg->total_threads, arg->tmp);
-    
-    if( clock_gettime( CLOCK_THREAD_CPUTIME_ID, &time_thread_end) == -1 ) {
-        perror( "clock gettime" );
-        exit( EXIT_FAILURE );
-    }
-
-    time_thread_end = diff(time_thread_start, time_thread_end);
-
-    pthread_mutex_lock(&mutex);
-    time_thread_resid.tv_sec += time_thread_end.tv_sec;
-    time_thread_resid.tv_nsec += time_thread_end.tv_nsec;
-    //printf("\nThread_number = %d. Work done!\nThread_time\t= %f sec.\n\n",
-    //           arg->my_rank,
-    //           (double)time_thread_end.tv_sec + (double)time_thread_end.tv_nsec/(double)1000000000);
-    pthread_mutex_unlock(&mutex);
-
-    return NULL;
-}
 
 int main(int argc, char **argv){
     
     feenableexcept(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW | FE_UNDERFLOW);
     
-    struct timespec time_start, time_end, time_total, time_thread_total;
+    int     n = 0,                          /* misc */
+            rows,                           /* rows of matrix A sent to each worker */
+            taskid,                         /* a task identifier */
+            numtasks,                       /* number of tasks in partition */
+            error_in = 0, error_out = 0,    /* error handlers */
+            max_out = 0,                    /* size of output */
+            verbose = 0,                    /* debug */
+            temp = 0;
+            
+
+    double  *a,                             /* input matrix */
+            *b,                             /* output matrix(inverse) */
+            *x1, *x2;                       /* auxiliary vectors */
+            //t,                              /* time */
+            //res = 0.0;                      /* residual */
     
-    int n = 0;
-    int max_out = 0;
-    char *inFileName = NULL;
-    int verbose = 0;
-    char *formula = NULL;
-    double *X = NULL;
-    double *A = NULL;
+    char    *inFileName = NULL,             /* name of the input file */
+            *formula = NULL;                /* unique name of matrix generator */
+
     FILE *fin;
-    int result = 1;
-    double nev = 0.0;
-    int total_threads;
-    pthread_t *threads;
-    ARGS *args;
-    ARGS_mul *args_mul;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
+    MPI_Comm_rank(MPI_COMM_WORLD, &taskid);
+    //MPI_Status status;
+
+    formula = (char *)malloc(3 * sizeof(char));
+    int inp_type = 0;
     
-    
-    if ((get_args(&n, &inFileName, &verbose, &formula, &max_out, &total_threads, argc, argv)) != 0){
-        fprintf (stderr, "\nError: Can't get arguments!\n");
-        return -1;
+    if (taskid == 0)                        /* Master */
+    {
+        if ((get_args(&n, &inFileName, &verbose, &formula,
+            &max_out, argc, argv, taskid, numtasks)) != 0
+            )
+        {
+            if (taskid == 0) printf ("\nError: Can't get arguments!\n");
+            MPI_Abort(MPI_COMM_WORLD, temp);
+            return -1;
+        }
+
+        if (formula != NULL) inp_type = 0;
+        else inp_type = 1;
     }
-    
-    if (inFileName == NULL){
-        A = (double *)malloc (n * n * sizeof(double));
-        X = (double *)malloc (n * n * sizeof(double));
-        threads = (pthread_t*)malloc(total_threads * sizeof(pthread_t));
-        args = (ARGS*)malloc(total_threads * sizeof(ARGS));
+
+    MPI_Bcast(&inp_type, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (inp_type == 0) MPI_Bcast(formula, 3, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    if (inp_type == 0) MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&max_out, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (taskid + 1 > n%numtasks) rows = n/numtasks;
+    else rows = n/numtasks + 1;
+
+    if (inp_type == 0){
+        a = (double *)malloc (rows * n * sizeof(double));
+        b = (double *)malloc (rows * n * sizeof(double));
+        x1 = (double *)malloc (n * sizeof(double));
+        x2 = (double *)malloc (n * sizeof(double));
+
+        if ((a && b && x1 && x2) != 1) error_in = 1;
+
+        MPI_Allreduce(&error_in, &error_out, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         
-        if ((A && X && threads && args) != 1) {
-            printf ("\nError: Not enough memory!\n");
-            if (A == NULL)
-                free(A);
-            if (X == NULL)
-                free(X);
-            if (threads == NULL)
-                free(threads);
-            if (args == NULL)
-                free(args);
+        if (error_out != 0) {
+            if (taskid == 0) printf ("\nError: Not enough memory!\n");
+            if (a != NULL)
+                free(a);
+            if (b != NULL)
+                free(b);
+            if (x1 != NULL)
+                free(x1);
+            if (x2 != NULL)
+                free(x2);
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, temp);
             return -1;
         }
         
-        if ((create_matrix(A, n, formula)) != 0){
-            printf ("\nError: Can't create matrix!\n");
-            free(A);
-            free(X);
-            free(threads);
-            free(args);
+        if ((create_matrix(a, n, formula, taskid, numtasks)) != 0){
+            if (taskid == 0) printf ("\nError: Can't create matrix!\n");
+            if (a != NULL)
+                free(a);
+            if (b != NULL)
+                free(b);
+            if (x1 != NULL)
+                free(x1);
+            if (x2 != NULL)
+                free(x2);
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, temp);
             return -1;
         }
     } else {
-        fin = fopen(inFileName, "r");
+        if (taskid == 0)                    /* Master */
+        {
+            fin = fopen(inFileName, "r");
+            
+            if (fin == NULL){
+                if (taskid == 0) printf("\nError: Can't open file!\n");
+                MPI_Abort(MPI_COMM_WORLD, temp);
+                return -1;
+            }
+            
+            if (fscanf(fin, "%d", &n) != 1){
+                if (taskid == 0) printf("\nError: Can't read dimension from file!\n");
+                fclose(fin);
+                MPI_Abort(MPI_COMM_WORLD, temp);
+                return -1;
+            }
         
-        if (fin == NULL){
-            printf("\nError: Can't open file!\n");
+            if (n < 1){
+                if (taskid == 0) printf ("\nError: Invalid matrix dimension!\n");
+                fclose(fin);
+                MPI_Abort(MPI_COMM_WORLD, temp);
+                return -1;
+            }
+        }
+
+        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        
+        if (taskid + 1 > n%numtasks) rows = n/numtasks;
+        else rows = n/numtasks + 1;
+
+        a = (double *)malloc (rows * n * sizeof(double));
+        b = (double *)malloc (rows * n * sizeof(double));
+        x1 = (double *)malloc (n * sizeof(double));
+        x2 = (double *)malloc (n * sizeof(double));
+
+        if ((a && b && x1 && x2) != 1) error_in = 1;
+
+        MPI_Allreduce(&error_in, &error_out, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+            
+        if ((a && b && x1 && x2) != 1) {
+            if (taskid == 0) printf ("\nError: Not enough memory!\n");
+            if (a != NULL)
+                free(a);
+            if (b != NULL)
+                free(b);
+            if (x1 != NULL)
+                free(x1);
+            if (x2 != NULL)
+                free(x2);
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, temp);
             return -1;
         }
-        
-        if (fscanf(fin, "%d", &n) != 1){
-            printf("\nError: Can't read dimension from file!\n");
-            fclose(fin);
-            return -1;
+
+        /*if(taskid > 0){
+            MPI_Send(a, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD); // to MASTER
+        }*/
+
+        if(taskid != -1){
+            if (InputMatrix(n, a, fin, taskid, numtasks) != 0){
+                if (taskid == 0) printf("\nError: Can't read matrix from file!\n");
+                fclose(fin);
+                free(a);
+                free(b);
+                free(x1);
+                free(x2);
+                MPI_Abort(MPI_COMM_WORLD, temp);
+                return -1;
+            }
         }
-        
-        if (n < 1){
-            printf ("\nError: Invalid matrix dimension!\n");
-            fclose(fin);
-            return -1;
-        }
-        
-        A = (double *)malloc (n * n * sizeof(double));
-        X = (double *)malloc (n * n * sizeof(double));
-        threads = (pthread_t*)malloc(total_threads * sizeof(pthread_t));
-        args = (ARGS*)malloc(total_threads * sizeof(ARGS));
-        
-        if ((A && X && threads && args) != 1) {
-            printf ("\nError: Not enough memory!\n");
-            if (A == NULL)
-                free(A);
-            if (X == NULL)
-                free(X);
-            if (threads == NULL)
-                free(threads);
-            if (args == NULL)
-                free(args);
-            return -1;
-        }
-        
-        if (InputMatrix(n, A, fin) != 0){
-            printf("\nError: Can't read matrix from file!\n");
-            fclose(fin);
-            free(A);
-            free(X);
-            free(threads);
-            free(args);
-            return -1;
-        }
+
+        /*if(taskid > 0) {
+            if (taskid + 1 > n%numtasks) rows = n/numtasks;
+            else rows = n/numtasks + 1;
+            MPI_Recv(&a, rows*n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &status);
+        }*/
     }
+    //printf("\ntaskid = %d\n", taskid);
+    if (taskid == 0) printf("\nMatrix A:\n");
     
-    printf("\nMatrix A:\n");
+    PrintMatrix(n, a, x1, max_out, taskid, numtasks);
+
+    if (taskid == 0) printf("\n");
     
-    PrintMatrix(n, A, max_out);
+    if (taskid == 0) printf("\nCalculating...\n");
     
-    printf("\n");
-    
-    printf("\nCalculating...\n");
-    
-    if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
+/*    if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
         perror( "clock gettime" );
         exit( EXIT_FAILURE );
     }
-    
+    */
 // __________________Go into the main algorithm___________________
+    MPI_Barrier(MPI_COMM_WORLD);
 
+    InvertMatrix(n, a, b, x1, x2, taskid, numtasks);
 
-InvMatrix(n, A, X, total_threads, &status, v);
-
+    MPI_Barrier(MPI_COMM_WORLD);
 // _____________________________Exit______________________________
         
-    
-    if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
+    if (taskid == 0) printf("\nMatrix A^{-1}:\n");
+    PrintMatrix(n, b, x1, max_out, taskid, numtasks);
+
+    free(a);
+    free(b);
+    free(x1);
+    free(x2);
+
+    MPI_Finalize();
+
+    return 0;
+}
+
+
+/*    if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
         perror( "clock gettime" );
         exit( EXIT_FAILURE );
     }
@@ -373,3 +403,4 @@ InvMatrix(n, A, X, total_threads, &status, v);
     
     return 0;
 }
+*/

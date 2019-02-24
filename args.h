@@ -11,7 +11,7 @@
 #include <time.h>
 
 int get_args(int *matrixSize, char **inFileName, int *verbose, char **formula, int *max_out, 
-             int *total_threads, int argc, char **argv);
+             int argc, char **argv, int taskid, int numtasks);
 void help();
 
 #endif /* __ARGS_H_INCLUDED__ */
