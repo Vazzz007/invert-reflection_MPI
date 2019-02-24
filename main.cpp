@@ -55,9 +55,9 @@ int main(int argc, char **argv){
 
     double  *a,                             /* input matrix */
             *b,                             /* output matrix(inverse) */
-            *x1, *x2;                       /* auxiliary vectors */
-            //t,                              /* time */
-            //res = 0.0;                      /* residual */
+            *x1, *x2,                       /* auxiliary vectors */
+            total, start, end,              /* time */
+            res = 0.0, sumres;              /* residual */
     
     char    *inFileName = NULL,             /* name of the input file */
             *formula = NULL;                /* unique name of matrix generator */
@@ -189,11 +189,115 @@ int main(int argc, char **argv){
             return -1;
         }
 
-        /*if(taskid > 0){
-            MPI_Send(a, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD); // to MASTER
-        }*/
+        if (InputMatrix(n, a, fin, taskid, numtasks) != 0){
+            if (taskid == 0) printf("\nError: Can't read matrix from file!\n");
+            fclose(fin);
+            free(a);
+            free(b);
+            free(x1);
+            free(x2);
+            MPI_Abort(MPI_COMM_WORLD, temp);
+            return -1;
+        }
+    }
 
-        if(taskid != -1){
+    //printf("\ntaskid = %d\n", taskid);
+    if (taskid == 0) printf("\nMatrix A:\n");
+    
+    PrintMatrix(n, a, x1, max_out, taskid, numtasks);
+
+    if (taskid == 0) printf("\n");
+    
+    if (taskid == 0) printf("\nCalculating...\n");
+
+    if (numtasks > n) {
+        if (taskid == 0) printf("\nSet less(than n = %d) processes!\n", n + 1);
+        free(a);
+        free(b);
+        free(x1);
+        free(x2);
+        MPI_Abort(MPI_COMM_WORLD, temp);
+        return -1;
+    }
+
+
+// __________________Go into the main algorithm___________________
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    start = MPI_Wtime();
+
+    error_in = InvertMatrix(n, a, b, x1, x2, taskid, numtasks);
+
+    end = MPI_Wtime() - start;
+
+    if(error_in != 0){
+        printf("\nCan't invert.\n");
+        free(a);
+        free(b);
+        free(x1);
+        free(x2);
+        MPI_Abort(MPI_COMM_WORLD, temp);
+        return -1;
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+// _____________________________Exit______________________________
+        
+    MPI_Allreduce(&end, &total, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+    if (0){
+        if (taskid == 0) printf("\nCan't invert.\n");
+    } else {
+        if (taskid == 0) printf("\nMatrix A^{-1}:\n");
+        PrintMatrix(n, b, x1, max_out, taskid, numtasks);
+        if (taskid == 0) printf("\n");
+        
+        if (taskid == 0) printf("\nInversion time \t\t= %f sec.\nInversion_thread_time\t= %f sec.\n\n",
+               (double)total,
+               (double)end);
+        
+        
+        if (inp_type == 0){
+            if ((create_matrix(a, n, formula, taskid, numtasks)) != 0){
+                if (taskid == 0) printf ("\nError: Can't create matrix!\n");
+                if (a != NULL)
+                    free(a);
+                if (b != NULL)
+                    free(b);
+                if (x1 != NULL)
+                    free(x1);
+                if (x2 != NULL)
+                    free(x2);
+                MPI_Barrier(MPI_COMM_WORLD);
+                MPI_Abort(MPI_COMM_WORLD, temp);
+                return -1;
+            }
+        } else {
+            if (taskid == 0)                    /* Master */
+            {
+                fin = fopen(inFileName, "r");
+            
+                if (fin == NULL){
+                    if (taskid == 0) printf("\nError: Can't open file!\n");
+                    MPI_Abort(MPI_COMM_WORLD, temp);
+                    return -1;
+                }
+            
+                if (fscanf(fin, "%d", &n) != 1){
+                    if (taskid == 0) printf("\nError: Can't read dimension from file!\n");
+                    fclose(fin);
+                    MPI_Abort(MPI_COMM_WORLD, temp);
+                    return -1;
+                }
+        
+                if (n < 1){
+                    if (taskid == 0) printf ("\nError: Invalid matrix dimension!\n");
+                    fclose(fin);
+                    MPI_Abort(MPI_COMM_WORLD, temp);
+                    return -1;
+                }
+            }
+
             if (InputMatrix(n, a, fin, taskid, numtasks) != 0){
                 if (taskid == 0) printf("\nError: Can't read matrix from file!\n");
                 fclose(fin);
@@ -204,203 +308,47 @@ int main(int argc, char **argv){
                 MPI_Abort(MPI_COMM_WORLD, temp);
                 return -1;
             }
+
+            if(taskid == 0) fclose(fin);
         }
 
-        /*if(taskid > 0) {
-            if (taskid + 1 > n%numtasks) rows = n/numtasks;
-            else rows = n/numtasks + 1;
-            MPI_Recv(&a, rows*n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, &status);
-        }*/
-    }
-    //printf("\ntaskid = %d\n", taskid);
-    if (taskid == 0) printf("\nMatrix A:\n");
-    
-    PrintMatrix(n, a, x1, max_out, taskid, numtasks);
+        Transpose(n, b, x1, taskid, numtasks);
 
-    if (taskid == 0) printf("\n");
-    
-    if (taskid == 0) printf("\nCalculating...\n");
-    
-/*    if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
-        perror( "clock gettime" );
-        exit( EXIT_FAILURE );
-    }
-    */
-// __________________Go into the main algorithm___________________
-    MPI_Barrier(MPI_COMM_WORLD);
+        //PrintMatrix(n, b, x1, max_out, taskid, numtasks);
 
-    InvertMatrix(n, a, b, x1, x2, taskid, numtasks);
+        MPI_Barrier(MPI_COMM_WORLD);
 
-    MPI_Barrier(MPI_COMM_WORLD);
-// _____________________________Exit______________________________
-        
-    if (taskid == 0) printf("\nMatrix A^{-1}:\n");
-    PrintMatrix(n, b, x1, max_out, taskid, numtasks);
+        start = MPI_Wtime();
 
-    free(a);
-    free(b);
-    free(x1);
-    free(x2);
+        res = Residual(n, a, b, taskid, numtasks);
 
-    MPI_Finalize();
+        end = MPI_Wtime() - start;
 
-    return 0;
-}
+        MPI_Barrier(MPI_COMM_WORLD);
 
+        MPI_Allreduce(&res, &sumres, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-/*    if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
-        perror( "clock gettime" );
-        exit( EXIT_FAILURE );
-    }
-    time_end = diff(time_start, time_end);
-    time_total = time_end;
-    
-    if (result == -1){
-        printf("\nCan't invert.\n");
-    } else {
-        printf("\nMatrix A^{-1}:\n");
-        PrintMatrix(n, X, max_out);
-        printf("\n");
-        
-        printf("\nInversion time \t\t= %f sec.\nInversion_thread_time\t= %f sec.\n\n",
-               (double)time_total.tv_sec + (double)time_total.tv_nsec/(double)1000000000,
-               (double)time_thread_inv.tv_sec + (double)time_thread_inv.tv_nsec/(double)1000000000);
-        
-        
-        if (inFileName == NULL){
-            if ((create_matrix(A, n, formula)) != 0){
-                printf ("\nError: Can't create matrix!\n");
-                free(A);
-                free(X);
-                free(threads);
-                free(args);
-                return -1;
-            }
-        } else {
-            fin = fopen(inFileName, "r");
+        MPI_Allreduce(&end, &total, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        //printf("res = %f\n", res);
+        //printf("sumres = %f\n", sumres);
 
-            if (fin == NULL){
-                printf("\nError: Can't open file!\n");
-                free(A);
-                free(X);
-                free(threads);
-                free(args);
-                return -1;
-            }
+        if(taskid == 0) printf("\nResidual time \t\t= %f sec.\nResidual_thread_time\t= %f sec.\n\n",
+               (double)total,
+               (double)end);
 
-            if (fscanf(fin, "%d", &n) != 1){
-                printf("\nError: Can't read dimension from file!\n");
-                free(A);
-                free(X);
-                free(threads);
-                free(args);
-                fclose(fin);
-                return -1;
-            }
-
-            if (n < 1){
-                printf ("\nError: Invalid matrix dimension!\n");
-                free(A);
-                free(X);
-                free(threads);
-                free(args);
-                fclose(fin);
-                return -1;
-            }
-        
-            if (InputMatrix(n, A, fin) != 0){
-                printf("\nError: Can't read matrix from file!\n");
-                fclose(fin);
-                free(A);
-                free(X);
-                free(threads);
-                free(args);
-                return -1;
-            }
-            
-            fclose(fin);
-        }
-
-        args_mul = (ARGS_mul*)malloc(total_threads * sizeof(ARGS_mul));
-
-        if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
-            perror( "clock gettime" );
-            exit( EXIT_FAILURE );
-        }
-        
-        for (int i = 0; i < total_threads; i++){
-            args_mul[i].n = n;
-            args_mul[i].A = A;
-            args_mul[i].X = X;
-            args_mul[i].my_rank = i;
-            args_mul[i].residual = 0.0;
-            args_mul[i].total_threads = total_threads;
-            args_mul[i].tmp = 0.0;
-        }
-
-        for (int i = 0; i < total_threads; i++){
-            if (pthread_create(threads + i, NULL, Multiplication, args_mul + i)){
-                printf("Cannot create thread %d!\n", i);
-
-                if (A) free(A);
-                if (X) free(X);
-                if (threads) free(threads);
-                if (args) free(args);
-                if (args_mul) free(args_mul);
-
-                return -1;
-            }
-        }
-
-        for (int i = 0; i < total_threads; i++){
-            if (pthread_join(threads[i], NULL)){
-                printf("Cannot wait thread %d!\n", i);
-
-                if (A) free(A);
-                if (X) free(X);
-                if (threads) free(threads);
-                if (args) free(args);
-                if (args_mul) free(args_mul);
-
-                return -1;
-            }
-        }
-
-        if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
-            perror( "clock gettime" );
-            exit( EXIT_FAILURE );
-        }
-        time_end = diff(time_start, time_end);
-        printf("\nResidual time \t\t= %f sec.\nResidual_thread_time\t= %f sec.\n\n",
-               (double)time_end.tv_sec + (double)time_end.tv_nsec/(double)1000000000,
-               (double)time_thread_resid.tv_sec + (double)time_thread_resid.tv_nsec/(double)1000000000);
-        time_total.tv_sec += time_end.tv_sec;
-        time_total.tv_nsec += time_end.tv_nsec;
-
-        time_thread_total.tv_sec = time_thread_inv.tv_sec + time_thread_resid.tv_sec;
-        time_thread_total.tv_nsec = time_thread_inv.tv_nsec + time_thread_resid.tv_nsec;
-
-
-        for (int i = 0; i < total_threads; i++){
-            nev += (1) * args_mul[i].residual;
-        }
-
-        printf("\nTotal time \t\t= %f sec.\nTotal_thread_time\t= %f sec.\n\n",
+        /*printf("\nTotal time \t\t= %f sec.\nTotal_thread_time\t= %f sec.\n\n",
                (double)time_total.tv_sec + (double)time_total.tv_nsec/(double)1000000000,
                (double)time_thread_total.tv_sec + (double)time_thread_total.tv_nsec/(double)1000000000);
-
-        printf("\nSolution threaded ||A * A^{-1} - I||\t= %e\n", nev);
-
-        free(args_mul);
-
-        //printf("\nSolution ||A * A^{-1} - I||\t= %e\n", SolutionError(n, A, X));
+*/
+        if(taskid == 0) printf("\nSolution threaded ||A * A^{-1} - I||\t= %e\n", sqrt(abs(sumres - n)));
     }
 
-    free(threads);
-    free(args);
-    free(A);
-    free(X);
+    free(x1);
+    free(x2);
+    free(a);
+    free(b);
+
+    MPI_Finalize();
     
     return 0;
 }
-*/

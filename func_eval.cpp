@@ -3,7 +3,7 @@
 
 #include "func_eval.h"
 
-void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid, int numtasks)
+int InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid, int numtasks)
 {
   int i, j, k;
   int rows;
@@ -25,6 +25,9 @@ void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taski
     {
       if (i == n - 1)
       {
+        if(abs(a[i/numtasks * n + i]) < 1e-22){
+          return -1;
+        }
         tmp = 1.0/a[i/numtasks * n + i];
         a[i/numtasks * n + i] = 1.0;
         for (j = 0; j < n; j++)
@@ -39,6 +42,10 @@ void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taski
 
       tmp = sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
       a[i/numtasks * n + i] -= tmp;
+
+      if(sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]) < 1e-22){
+          return -1;
+        }
       inv_norma = 1.0/sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
       MPI_Bcast(&inv_norma, 1, MPI_DOUBLE, i%numtasks, MPI_COMM_WORLD);
 
@@ -163,4 +170,6 @@ void InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taski
           b[j * n + k] -= x1[k] * a[j * n + i];
     }
   }
+
+  return 0;
 }

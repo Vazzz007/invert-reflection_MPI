@@ -123,6 +123,6 @@ void help(){
            * -i input_file_name.txt - name of the input file\n\
            * -n number - number of elements (default = 10)\n\
            * -v - option for debugging\n\
-           * -f formula - define formula (choose from (choose from { sym ; symnul ; gilb ; 1 ; 9 }\n\
+           * -f formula - define formula (choose from (choose from { sym ; smn ; glb ; 9 }\n\
            * -m number - maximum output size (default = 5)\n\n");
 }
