@@ -11,7 +11,7 @@ struct globalArgs_t {
 static const char *optString = "i:n:f:vhm:?";
 
 int get_args(int *matrixSize, char **inFileName, int *verbose, char **formula, 
-             int *max_out, int argc, char **argv, int taskid, int numtasks
+             int *max_out, int argc, char **argv, int taskid
             ){
     
     int opt = 0;

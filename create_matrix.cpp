@@ -146,7 +146,9 @@ int InputMatrix(int n, double *A, FILE *fin, int taskid, int numtasks){
         //printf("\ntaskid %d recieved %d elements from taskid 0", taskid, rows*n);
     }
     MPI_Barrier(MPI_COMM_WORLD);
+    printf("\naux = %f\n", aux[0]);
     free(aux);
+    printf("\naux = %f\n", aux[0]);
     return 0;
 }
 
@@ -266,5 +268,7 @@ void Transpose(int n, double* a, double* x, int taskid, int numtasks){
     }
     //printf("\ntaskid = %d\n", taskid);
     MPI_Barrier(MPI_COMM_WORLD);
+    printf("\naux = %f\n", aux[0]);
     free(aux);
+    printf("\naux = %f\n", aux[0]);
 }
