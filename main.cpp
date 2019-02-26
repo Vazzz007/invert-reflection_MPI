@@ -69,13 +69,14 @@ int main(int argc, char **argv){
     MPI_Comm_rank(MPI_COMM_WORLD, &taskid);
     //MPI_Status status;
 
-    formula = (char *)malloc(3 * sizeof(char));
+    if (taskid > 0) formula = (char *)malloc(3 * sizeof(char));
+    printf("\n1taskid = %d, formula = %p\n", taskid, formula);
     int inp_type = 0;
     
     if (taskid == 0)                        /* Master */
     {
         if ((get_args(&n, &inFileName, &verbose, &formula,
-            &max_out, argc, argv, taskid, numtasks)) != 0
+            &max_out, argc, argv, taskid)) != 0
             )
         {
             if (taskid == 0) printf ("\nError: Can't get arguments!\n");
@@ -86,11 +87,13 @@ int main(int argc, char **argv){
         if (formula != NULL) inp_type = 0;
         else inp_type = 1;
     }
+    printf("\n2taskid = %d, formula = %p\n", taskid, formula);
 
     MPI_Bcast(&inp_type, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (inp_type == 0) MPI_Bcast(formula, 3, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if (inp_type == 0) MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&max_out, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    printf("\n3taskid = %d, formula = %p\n", taskid, formula);
 
     if (taskid + 1 > n%numtasks) rows = n/numtasks;
     else rows = n/numtasks + 1;
@@ -340,13 +343,16 @@ int main(int argc, char **argv){
                (double)time_total.tv_sec + (double)time_total.tv_nsec/(double)1000000000,
                (double)time_thread_total.tv_sec + (double)time_thread_total.tv_nsec/(double)1000000000);
 */
-        if(taskid == 0) printf("\nSolution threaded ||A * A^{-1} - I||\t= %e\n", sqrt(abs(sumres - n)));
+        if(taskid == 0) printf("\nSolution threaded ||A * A^{-1} - I||\t= %e\n", sqrt(fabs(sumres - n)));
     }
 
     free(x1);
     free(x2);
     free(a);
     free(b);
+
+    printf("\n4taskid = %d, formula = %p\n", taskid, formula);
+    //if (taskid > 0) free(formula);
 
     MPI_Finalize();
     

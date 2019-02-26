@@ -25,9 +25,11 @@ int InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid
     {
       if (i == n - 1)
       {
-        if(abs(a[i/numtasks * n + i]) < 1e-22){
+        //printf("\na = %f\n", a[i/numtasks * n + i]);
+        if(fabs(a[i/numtasks * n + i]) < 1e-50){
           return -1;
         }
+
         tmp = 1.0/a[i/numtasks * n + i];
         a[i/numtasks * n + i] = 1.0;
         for (j = 0; j < n; j++)
@@ -43,7 +45,7 @@ int InvertMatrix(int n, double *a, double *b, double *x1, double *x2, int taskid
       tmp = sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
       a[i/numtasks * n + i] -= tmp;
 
-      if(sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]) < 1e-22){
+      if(sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]) < 1e-50){
           return -1;
         }
       inv_norma = 1.0/sqrt(q2 + a[i/numtasks * n + i] * a[i/numtasks * n + i]);
