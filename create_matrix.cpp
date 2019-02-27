@@ -122,19 +122,22 @@ int InputMatrix(int n, double *A, FILE *fin, int taskid, int numtasks){
             for (j = 0; j < n; ++j)
                 A[i * n + j] = aux[(taskid + numtasks * i)*n + j];
             //printf("\ntaskid = %d, rows = %d\n", taskid, rows);
-            sum += rows;
-            if (numtasks == 1) return 0;
-            for (k = 1; k < numtasks; ++k){
-                if (k + 1 > n%numtasks) rows = n/numtasks;
-                else rows = n/numtasks + 1;
-                //printf("\ntaskid %d waiting for sending %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
-                for (int s = 0; s < rows; ++s){
-                    MPI_Send(&aux[(k + numtasks * s)*n], n, MPI_DOUBLE, k, 0, MPI_COMM_WORLD); // to WORKERS
-                }
-            
-                //printf("\ntaskid %d sent %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
-                sum += rows;
+        sum += rows;
+        if (numtasks == 1){
+        	free(aux);
+        	return 0;	
+        } 
+        for (k = 1; k < numtasks; ++k){
+            if (k + 1 > n%numtasks) rows = n/numtasks;
+            else rows = n/numtasks + 1;
+            //printf("\ntaskid %d waiting for sending %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
+            for (int s = 0; s < rows; ++s){
+                MPI_Send(&aux[(k + numtasks * s)*n], n, MPI_DOUBLE, k, 0, MPI_COMM_WORLD); // to WORKERS
             }
+            
+            //printf("\ntaskid %d sent %d elements(%f) to taskid %d\n", taskid, n*rows, aux[n*sum], k);
+            sum += rows;
+        }
     } else {
         
         if (taskid + 1 > n%numtasks) rows = n/numtasks;
@@ -239,7 +242,10 @@ void Transpose(int n, double* a, double* x, int taskid, int numtasks){
                 a[j * n + i] = aux[i*n + (j * numtasks + taskid)];
         //printf("\ntaskid = %d, rows = %d\n", taskid, rows);
         sum += rows;
-        if (numtasks == 1) return;
+        if (numtasks == 1){
+        	free(aux);
+        	return;	
+        }
         for (int k = 1; k < numtasks; ++k){
             if (k + 1 > n%numtasks) rows = n/numtasks;
             else rows = n/numtasks + 1;
