@@ -37,8 +37,6 @@ struct timespec diff(struct timespec start, struct timespec end)
     return temp;
 }
 
-struct timespec time_thread_inv, time_thread_resid;
-
 int main(int argc, char **argv){
     
     feenableexcept(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW | FE_UNDERFLOW);
@@ -58,6 +56,8 @@ int main(int argc, char **argv){
             *x1, *x2,                       /* auxiliary vectors */
             total, start, end,              /* time */
             res = 0.0, sumres;              /* residual */
+
+	struct timespec time_start, time_end;
     
     char    *inFileName = NULL,             /* name of the input file */
             *formula = NULL;                /* unique name of matrix generator */
@@ -70,7 +70,7 @@ int main(int argc, char **argv){
     //MPI_Status status;
 
     if (taskid > 0) formula = (char *)malloc(3 * sizeof(char));
-    printf("\n1taskid = %d, formula = %p\n", taskid, formula);
+    //printf("\n1taskid = %d, formula = %p\n", taskid, formula);
     int inp_type = 0;
     
     if (taskid == 0)                        /* Master */
@@ -87,13 +87,13 @@ int main(int argc, char **argv){
         if (formula != NULL) inp_type = 0;
         else inp_type = 1;
     }
-    printf("\n2taskid = %d, formula = %p\n", taskid, formula);
+    //printf("\n2taskid = %d, formula = %p\n", taskid, formula);
 
     MPI_Bcast(&inp_type, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (inp_type == 0) MPI_Bcast(formula, 3, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if (inp_type == 0) MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&max_out, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    printf("\n3taskid = %d, formula = %p\n", taskid, formula);
+    //printf("\n3taskid = %d, formula = %p\n", taskid, formula);
 
     if (taskid + 1 > n%numtasks) rows = n/numtasks;
     else rows = n/numtasks + 1;
@@ -227,11 +227,22 @@ int main(int argc, char **argv){
 // __________________Go into the main algorithm___________________
     MPI_Barrier(MPI_COMM_WORLD);
 
+    if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
+        perror( "clock gettime" );
+        exit( EXIT_FAILURE );
+    }
+
     start = MPI_Wtime();
 
     error_in = InvertMatrix(n, a, b, x1, x2, taskid, numtasks);
 
     end = MPI_Wtime() - start;
+
+    if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
+        perror( "clock gettime" );
+        exit( EXIT_FAILURE );
+    }
+    time_end = diff(time_start, time_end);
 
     if(error_in != 0){
         printf("\nCan't invert.\n");
@@ -246,7 +257,7 @@ int main(int argc, char **argv){
     MPI_Barrier(MPI_COMM_WORLD);
 // _____________________________Exit______________________________
         
-    MPI_Allreduce(&end, &total, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    //MPI_Allreduce(&end, &total, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
     if (0){
         if (taskid == 0) printf("\nCan't invert.\n");
@@ -254,10 +265,11 @@ int main(int argc, char **argv){
         if (taskid == 0) printf("\nMatrix A^{-1}:\n");
         PrintMatrix(n, b, x1, max_out, taskid, numtasks);
         if (taskid == 0) printf("\n");
+
+        if (taskid == 0) printf("\nInversion time \t\t= %f sec.\n\n",
+               (double)time_end.tv_sec + (double)time_end.tv_nsec/(double)1000000000);
         
-        if (taskid == 0) printf("\nInversion time \t\t= %f sec.\nInversion_thread_time\t= %f sec.\n\n",
-               (double)total,
-               (double)end);
+        printf("\nInversion time of process %d\t= %f sec.\n\n", taskid, (double)end);
         
         
         if (inp_type == 0){
@@ -321,11 +333,22 @@ int main(int argc, char **argv){
 
         MPI_Barrier(MPI_COMM_WORLD);
 
+        if( clock_gettime( CLOCK_MONOTONIC, &time_start) == -1 ) {
+            perror( "clock gettime" );
+            exit( EXIT_FAILURE );
+        }
+
         start = MPI_Wtime();
 
         res = Residual(n, a, b, taskid, numtasks);
 
         end = MPI_Wtime() - start;
+
+        if( clock_gettime( CLOCK_MONOTONIC, &time_end) == -1 ) {
+            perror( "clock gettime" );
+            exit( EXIT_FAILURE );
+        }
+        time_end = diff(time_start, time_end);
 
         MPI_Barrier(MPI_COMM_WORLD);
 
@@ -335,9 +358,10 @@ int main(int argc, char **argv){
         //printf("res = %f\n", res);
         //printf("sumres = %f\n", sumres);
 
-        if(taskid == 0) printf("\nResidual time \t\t= %f sec.\nResidual_thread_time\t= %f sec.\n\n",
-               (double)total,
-               (double)end);
+        if (taskid == 0) printf("\nResidual time \t\t= %f sec.\n\n",
+               (double)time_end.tv_sec + (double)time_end.tv_nsec/(double)1000000000);
+        
+        printf("\nResidual time of process %d\t= %f sec.\n\n", taskid, (double)end);
 
         /*printf("\nTotal time \t\t= %f sec.\nTotal_thread_time\t= %f sec.\n\n",
                (double)time_total.tv_sec + (double)time_total.tv_nsec/(double)1000000000,
@@ -351,7 +375,7 @@ int main(int argc, char **argv){
     free(a);
     free(b);
 
-    printf("\n4taskid = %d, formula = %p\n", taskid, formula);
+    //printf("\n4taskid = %d, formula = %p\n", taskid, formula);
     //if (taskid > 0) free(formula);
 
     MPI_Finalize();
